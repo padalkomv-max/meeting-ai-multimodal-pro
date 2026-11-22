@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 import tempfile
@@ -7,6 +8,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 os.environ['MEETING_DATA_DIR'] = tempfile.mkdtemp(prefix='meeting_test_')
+os.environ['APP_AUTH_REQUIRED'] = 'false'
 import app as mod
 
 
@@ -221,3 +223,16 @@ def test_cloud_pipeline_calls_existing_analysis(monkeypatch):
     with mod.connect() as conn:
         row = conn.execute('SELECT name, status FROM meetings WHERE id=?', (mid,)).fetchone()
     assert tuple(row) == ('lesson.webm', 'Распознавание речи')
+
+
+def test_authentication_protects_app_but_not_healthcheck(monkeypatch):
+    monkeypatch.setenv('APP_AUTH_REQUIRED', 'true')
+    monkeypatch.setenv('APP_AUTH_USER', 'render-user')
+    monkeypatch.setenv('APP_AUTH_PASSWORD', 'render-password')
+    token = base64.b64encode(b'render-user:render-password').decode()
+    with TestClient(mod.app) as client:
+        assert client.get('/healthz').status_code == 200
+        assert client.get('/api/meetings').status_code == 401
+        assert client.get('/api/meetings', headers={'Authorization': 'Basic invalid'}).status_code == 401
+        response = client.get('/api/meetings', headers={'Authorization': f'Basic {token}'})
+        assert response.status_code == 200

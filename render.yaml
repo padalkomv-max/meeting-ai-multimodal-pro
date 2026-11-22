@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: meeting-ai-multimodal-pro
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /healthz
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: APP_AUTH_USER
+        sync: false
+      - key: APP_AUTH_PASSWORD
+        sync: false
+      - key: APP_AUTH_REQUIRED
+        value: "true"
+      - key: MEETING_DATA_DIR
+        value: /var/data
+      - key: MAX_VIDEO_MB
+        value: "120"
+      - key: OPENAI_TRANSCRIBE_MODEL
+        value: whisper-1
+      - key: OPENAI_SUMMARY_MODEL
+        value: gpt-4o-mini

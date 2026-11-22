@@ -1,6 +1,9 @@
+import base64
+import binascii
 import json
 import os
 import re
+import secrets
 import sqlite3
 import subprocess
 import tempfile
@@ -13,7 +16,7 @@ from urllib.parse import parse_qs, unquote, urljoin, urlsplit
 
 import httpx
 from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse
 from pydantic import BaseModel
 
 ROOT = Path(__file__).resolve().parent
@@ -24,6 +27,46 @@ app = FastAPI(title='AI-анализатор встреч')
 MAX_REDIRECTS = 5
 GOOGLE_DRIVE_HOSTS = {'drive.google.com', 'www.drive.google.com'}
 GOOGLE_DOWNLOAD_HOSTS = GOOGLE_DRIVE_HOSTS | {'drive.usercontent.google.com'}
+
+
+def _auth_required():
+    return os.getenv('APP_AUTH_REQUIRED', 'true').strip().lower() not in {'0', 'false', 'no', 'off'}
+
+
+@app.middleware('http')
+async def protect_application(request, call_next):
+    if request.url.path == '/healthz' or not _auth_required():
+        return await call_next(request)
+
+    expected_user = os.getenv('APP_AUTH_USER', '').strip()
+    expected_password = os.getenv('APP_AUTH_PASSWORD', '')
+    if not expected_user or not expected_password:
+        return PlainTextResponse(
+            'Сервис не настроен: задайте APP_AUTH_USER и APP_AUTH_PASSWORD.',
+            status_code=503,
+        )
+
+    authorization = request.headers.get('authorization', '')
+    scheme, _, encoded = authorization.partition(' ')
+    if scheme.lower() != 'basic' or not encoded:
+        return PlainTextResponse(
+            'Требуется авторизация.',
+            status_code=401,
+            headers={'WWW-Authenticate': 'Basic realm="meeting_ai"'},
+        )
+    try:
+        decoded = base64.b64decode(encoded, validate=True).decode('utf-8')
+        username, separator, password = decoded.partition(':')
+    except (binascii.Error, UnicodeDecodeError):
+        username, separator, password = '', '', ''
+    if (not separator or not secrets.compare_digest(username, expected_user)
+            or not secrets.compare_digest(password, expected_password)):
+        return PlainTextResponse(
+            'Неверные учётные данные.',
+            status_code=401,
+            headers={'WWW-Authenticate': 'Basic realm="meeting_ai"'},
+        )
+    return await call_next(request)
 
 
 def connect():
@@ -183,6 +226,11 @@ def run_cloud_import(meeting_id: str, source_url: str, video_path: Path):
 def list_meetings():
     with connect() as conn:
         return [row_to_dict(r) for r in conn.execute('SELECT * FROM meetings ORDER BY created_at DESC')]
+
+
+@app.get('/healthz')
+def healthz():
+    return {'status': 'ok'}
 
 
 @app.get('/api/meetings/{meeting_id}')
